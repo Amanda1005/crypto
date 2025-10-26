@@ -73,14 +73,26 @@ def plot_chart(coin_id, title):
 # ===================== API 預測函數 =====================
 def predict(api_url, payload):
     try:
-        response = requests.get(api_url, params=payload, timeout=10)
+        response = requests.get(api_url, params=payload, timeout=15)
         if response.status_code == 200:
             result = response.json()
-            return result.get('predicted_next_day_high', 'N/A')
+            # 嘗試多種可能的鍵名
+            prediction = result.get('predicted_next_day_high') or \
+                        result.get('prediction') or \
+                        result.get('predicted_high') or \
+                        result.get('next_day_high')
+            if prediction is not None:
+                return prediction
+            # 如果找不到預期的鍵，返回整個結果
+            return str(result)
         else:
-            return f"API Error {response.status_code}"
+            return f"API Error: {response.status_code} - {response.text[:100]}"
+    except requests.exceptions.Timeout:
+        return "Request Timeout - API took too long to respond"
+    except requests.exceptions.ConnectionError:
+        return "Connection Error - Unable to reach API"
     except Exception as e:
-        return f"Error: {e}"
+        return f"Error: {str(e)}"
 
 # ===================== 全域 CSS（韓風 + 無閃爍按鈕） =====================
 st.markdown("""
@@ -190,17 +202,33 @@ for i, (cid, symbol, icon_url, model_name, api_url) in enumerate(coins):
         with col_right:
             # 使用 session_state 來保存預測結果
             if st.button(f"🚀 Predict {symbol} High", key=f"{symbol}_predict"):
-                with st.spinner('Predicting...'):
+                with st.spinner(f'Predicting {symbol}...'):
                     prediction = predict(api_url, {
                         "open": 100, "high": 105, "low": 95, "close": 102,
                         "volume": 3000000, "marketCap": 1.0e9,
                         "price_diff": 5, "daily_range": 10, "SMA_7": 101
                     })
                     st.session_state.predictions[symbol] = prediction
+                    # 調試用：顯示 API URL
+                    if symbol == "SOL":
+                        st.session_state[f'{symbol}_api_url'] = api_url
             
             # 顯示預測結果
             if symbol in st.session_state.predictions:
-                st.markdown(
-                    f"<div class='result-box'><h3>Predicted Next-Day High: ${st.session_state.predictions[symbol]}</h3></div>", 
-                    unsafe_allow_html=True
-                )
+                result = st.session_state.predictions[symbol]
+                if isinstance(result, (int, float)):
+                    st.markdown(
+                        f"<div class='result-box'><h3>Predicted Next-Day High: ${result:,.2f}</h3></div>", 
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.markdown(
+                        f"<div class='result-box'><h3>Predicted Next-Day High: {result}</h3></div>", 
+                        unsafe_allow_html=True
+                    )
+                
+                # 調試資訊（只對 Solana 顯示）
+                if symbol == "SOL" and f'{symbol}_api_url' in st.session_state:
+                    with st.expander("🔍 Debug Info"):
+                        st.write(f"API URL: {st.session_state[f'{symbol}_api_url']}")
+                        st.write(f"Response: {result}")
