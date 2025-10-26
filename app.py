@@ -2,6 +2,8 @@ import streamlit as st
 import requests
 import matplotlib.pyplot as plt
 from datetime import datetime
+import matplotlib
+matplotlib.use('Agg')  # 使用非交互式後端
 
 # ===================== 頁面設定 =====================
 st.set_page_config(page_title="Crypto Next-Day High Dashboard", layout="wide")
@@ -40,19 +42,22 @@ def get_crypto_prices():
         return "BTC/USD 67,450 ▲1.25% ETH/USD 3,120 ▲0.84% XRP/USD 0.512 ▼0.34% SOL/USD 102.4 ▲2.02%"
 
 # ===================== 折線圖繪製（30天） =====================
-@st.cache_data(ttl=600)
-def plot_chart_cached(coin_id, title):
+def plot_chart(coin_id, title):
+    """不使用緩存，每次都重新繪製"""
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
     params = {"vs_currency": "usd", "days": "30"}
     try:
         res = requests.get(url, params=params, timeout=10).json()
-        if "prices" not in res:
+        prices = res.get("prices", [])
+        if not prices:
             return None
-        prices = res["prices"]
+            
         x = [datetime.fromtimestamp(p[0]/1000) for p in prices]
         y = [p[1] for p in prices]
 
-        fig, ax = plt.subplots(figsize=(4, 2))
+        # 創建新的 figure
+        fig = plt.figure(figsize=(4, 2))
+        ax = fig.add_subplot(111)
         ax.plot(x, y, color="#00bfff", linewidth=2.0)
         ax.fill_between(x, y, color="#00bfff", alpha=0.2)
         ax.set_title(title, fontsize=11, color="#a3c9ff", pad=10)
@@ -62,6 +67,7 @@ def plot_chart_cached(coin_id, title):
         plt.tight_layout()
         return fig
     except Exception as e:
+        print(f"Error: {e}")
         return None
 
 # ===================== API 預測函數 =====================
@@ -173,15 +179,16 @@ for i, (cid, symbol, icon_url, model_name, api_url) in enumerate(coins):
         col_left, col_right = st.columns([2, 1])
         
         with col_left:
-            fig = plot_chart_cached(cid, f"{symbol} 30-Day Price Trend (USD)")
+            # 每次都重新繪製圖表
+            fig = plot_chart(cid, f"{symbol} 30-Day Price Trend (USD)")
             if fig:
-                st.pyplot(fig, use_container_width=False)
-                plt.close(fig)  # 關閉圖表避免重疊
+                st.pyplot(fig)
+                plt.close(fig)
             else:
-                st.info(f"Unable to load {symbol} chart data")
+                st.info(f"📊 Loading {symbol} chart...")
 
         with col_right:
-            # 使用 session_state 來保存預測結果，避免閃爍
+            # 使用 session_state 來保存預測結果
             if st.button(f"🚀 Predict {symbol} High", key=f"{symbol}_predict"):
                 with st.spinner('Predicting...'):
                     prediction = predict(api_url, {
