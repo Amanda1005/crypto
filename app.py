@@ -44,22 +44,25 @@ def get_crypto_prices():
 def plot_chart_cached(coin_id, title):
     url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
     params = {"vs_currency": "usd", "days": "30"}
-    res = requests.get(url, params=params).json()
-    if "prices" not in res:
-        return None
-    prices = res["prices"]
-    x = [datetime.fromtimestamp(p[0]/1000) for p in prices]
-    y = [p[1] for p in prices]
+    try:
+        res = requests.get(url, params=params, timeout=10).json()
+        if "prices" not in res:
+            return None
+        prices = res["prices"]
+        x = [datetime.fromtimestamp(p[0]/1000) for p in prices]
+        y = [p[1] for p in prices]
 
-    fig, ax = plt.subplots(figsize=(4, 2))
-    ax.plot(x, y, color="#00bfff", linewidth=2.0)
-    ax.fill_between(x, y, color="#00bfff", alpha=0.2)
-    ax.set_title(title, fontsize=11, color="#a3c9ff", pad=10)
-    ax.tick_params(axis='x', labelsize=8)
-    ax.tick_params(axis='y', labelsize=8)
-    plt.xticks(rotation=25)
-    plt.tight_layout()
-    return fig
+        fig, ax = plt.subplots(figsize=(4, 2))
+        ax.plot(x, y, color="#00bfff", linewidth=2.0)
+        ax.fill_between(x, y, color="#00bfff", alpha=0.2)
+        ax.set_title(title, fontsize=11, color="#a3c9ff", pad=10)
+        ax.tick_params(axis='x', labelsize=8)
+        ax.tick_params(axis='y', labelsize=8)
+        plt.xticks(rotation=25)
+        plt.tight_layout()
+        return fig
+    except Exception as e:
+        return None
 
 # ===================== API 預測函數 =====================
 def predict(api_url, payload):
@@ -173,6 +176,9 @@ for i, (cid, symbol, icon_url, model_name, api_url) in enumerate(coins):
             fig = plot_chart_cached(cid, f"{symbol} 30-Day Price Trend (USD)")
             if fig:
                 st.pyplot(fig, use_container_width=False)
+                plt.close(fig)  # 關閉圖表避免重疊
+            else:
+                st.info(f"Unable to load {symbol} chart data")
 
         with col_right:
             # 使用 session_state 來保存預測結果，避免閃爍
