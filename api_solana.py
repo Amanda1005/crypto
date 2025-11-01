@@ -1,10 +1,3 @@
-"""
-Solana (SOL) 價格預測 API
-模型: LightGBM
-作者: Student D (Nian-Ya Weng)
-部署: Render (https://solana-fastapi.onrender.com)
-"""
-
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import joblib
@@ -12,23 +5,23 @@ import numpy as np
 from fastapi.middleware.cors import CORSMiddleware
 import os
 
-# ===================== FastAPI 初始化 =====================
+# ===================== FastAPI Initialization =====================
 app = FastAPI(
     title="Solana Price Prediction API",
     description="Predict Solana next-day high price using LightGBM model",
     version="1.0.0"
 )
 
-# ===================== CORS 設定（允許 Streamlit 跨域請求） =====================
+# ===================== CORS Settings ====================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 生產環境建議改為具體的 Streamlit URL
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ===================== 載入 LightGBM 模型 =====================
+# ===================== Loading Model =====================
 MODEL_PATH = "models/solana_lightgbm_model.pkl"
 
 try:
@@ -41,22 +34,10 @@ try:
         print("   Using fallback prediction (high * 1.02)")
 except Exception as e:
     model = None
-    print(f"❌ Error loading model: {e}")
+    print(f"Error loading model: {e}")
 
-# ===================== 請求格式定義 =====================
+# ===================== Request Format Definition ====================
 class PredictionRequest(BaseModel):
-    """
-    輸入特徵說明:
-    - open: 開盤價
-    - high: 當日最高價
-    - low: 當日最低價
-    - close: 收盤價
-    - volume: 交易量
-    - marketCap: 市值
-    - price_diff: 價差 (high - low)
-    - daily_range: 日波動範圍
-    - SMA_7: 7日簡單移動平均
-    """
     open: float
     high: float
     low: float
@@ -82,10 +63,10 @@ class PredictionRequest(BaseModel):
             }
         }
 
-# ===================== 根路徑 =====================
+# ==================== Root Path =====================
 @app.get("/")
 def read_root():
-    """API 基本資訊"""
+    """API Basic Information"""
     return {
         "message": "🚀 Solana (SOL) Price Prediction API",
         "model": "LightGBM",
@@ -101,7 +82,7 @@ def read_root():
         "example_request": "GET /predict?open=100&high=105&low=95&close=102&volume=3000000&marketCap=1e9&price_diff=5&daily_range=10&SMA_7=101"
     }
 
-# ===================== 預測端點 (GET) =====================
+# ===================== Predict Endpoint (GET) =====================
 @app.get("/predict")
 def predict_get(
     open: float,
@@ -114,24 +95,20 @@ def predict_get(
     daily_range: float,
     SMA_7: float
 ):
-    """
-    使用 Query Parameters 進行預測
-    範例: GET /predict?open=100&high=105&low=95&close=102&volume=3000000&marketCap=1e9&price_diff=5&daily_range=10&SMA_7=101
-    """
     try:
-        # 組合特徵向量（順序必須與訓練時一致！）
+        # Combined feature vectors
         features = np.array([[
             open, high, low, close, volume, marketCap,
             price_diff, daily_range, SMA_7
         ]])
         
-        # 執行預測
+        # Execute Prediction
         if model is not None:
             prediction = float(model.predict(features)[0])
             prediction_source = "LightGBM Model"
         else:
-            # Fallback: 簡單估算（僅供測試用）
-            prediction = high * 1.02  # 假設明天高點比今天高 2%
+           # Fallback: Simple Estimation
+            prediction = high * 1.02  # Assuming tomorrow's high is 2% higher than today's
             prediction_source = "Fallback Estimation (Model not loaded)"
         
         return {
@@ -157,18 +134,9 @@ def predict_get(
             detail=f"Prediction error: {str(e)}"
         )
 
-# ===================== 預測端點 (POST) =====================
+# ===================== Predict Endpoint (POST) =====================
 @app.post("/predict")
 def predict_post(request: PredictionRequest):
-    """
-    使用 JSON Body 進行預測
-    範例 Body:
-    {
-        "open": 100, "high": 105, "low": 95, "close": 102,
-        "volume": 3000000, "marketCap": 1e9,
-        "price_diff": 5, "daily_range": 10, "SMA_7": 101
-    }
-    """
     try:
         features = np.array([[
             request.open, request.high, request.low, request.close,
@@ -192,10 +160,10 @@ def predict_post(request: PredictionRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
 
-# ===================== 健康檢查 =====================
+# ===================== Health Check =====================
 @app.get("/health")
 def health_check():
-    """檢查 API 和模型狀態"""
+    """Check API and model status"""
     return {
         "status": "healthy",
         "model_loaded": model is not None,
@@ -203,10 +171,10 @@ def health_check():
         "model_exists": os.path.exists(MODEL_PATH)
     }
 
-# ===================== 測試端點 =====================
+# ==================== Test Endpoints =====================
 @app.get("/test")
 def test_prediction():
-    """快速測試預測功能"""
+    """Quick Test Prediction Function"""
     test_data = {
         "open": 102.5,
         "high": 105.3,
@@ -226,9 +194,9 @@ def test_prediction():
         "prediction_result": result
     }
 
-# ===================== 啟動說明 =====================
+# ===================== Startup Instructions =====================
 if __name__ == "__main__":
     import uvicorn
-    print("🚀 Starting Solana FastAPI server...")
-    print("📝 Visit http://localhost:8000/docs for API documentation")
+    print("Starting Solana FastAPI server...")
+    print("Visit http://localhost:8000/docs for API documentation")
     uvicorn.run(app, host="0.0.0.0", port=8000)

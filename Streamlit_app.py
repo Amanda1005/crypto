@@ -8,6 +8,8 @@ st.set_page_config(page_title="Crypto Next-Day High Dashboard", layout="wide")
 
 if 'predictions' not in st.session_state:
     st.session_state.predictions = {}
+if 'prediction_time' not in st.session_state:
+    st.session_state.prediction_time = {}
 if 'selected_coin' not in st.session_state:
     st.session_state.selected_coin = 'Bitcoin'
 
@@ -36,25 +38,39 @@ def get_crypto_prices():
         return "BTC/USD 67,450 ▲1.25% ETH/USD 3,120 ▲0.84% XRP/USD 0.512 ▼0.34% SOL/USD 102.4 ▲2.02%"
 
 @st.cache_data(ttl=300)
-def get_kraken_ohlc(pair):
-    url = "https://api.kraken.com/0/public/OHLC"
-    params = {"pair": pair, "interval": 1440}
+def get_coin_history(coin_id):
+    url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/market_chart"
+    params = {"vs_currency": "usd", "days": "7"}
     try:
         response = requests.get(url, params=params, timeout=10).json()
-        if response.get("error") or not response.get("result"):
+        if not response.get("prices"):
             return None
-        key = list(response["result"].keys())[0]
-        data = response["result"][key][-7:]
+        
+        prices = response["prices"]
+        
+        # Group by date
+        daily_data = {}
+        for price_point in prices:
+            timestamp = price_point[0] / 1000
+            date = datetime.fromtimestamp(timestamp).date()
+            price = price_point[1]
+            
+            if date not in daily_data:
+                daily_data[date] = []
+            daily_data[date].append(price)
+        
+        # Calculate daily OHLC
         result = []
-        for row in data:
+        for date, prices in sorted(daily_data.items()):
             result.append({
-                "date": datetime.fromtimestamp(int(row[0])),
-                "open": float(row[1]),
-                "high": float(row[2]),
-                "low": float(row[3]),
-                "close": float(row[4])
+                "date": datetime.combine(date, datetime.min.time()),
+                "open": prices[0],
+                "high": max(prices),
+                "low": min(prices),
+                "close": prices[-1]
             })
-        return result
+        
+        return result[-7:]  # Only return the last 7 days
     except Exception:
         return None
 
@@ -62,14 +78,17 @@ def plot_candlestick(data, symbol):
     if not data:
         return None
     df = pd.DataFrame(data)
+    
     fig = go.Figure(data=[go.Candlestick(
         x=df['date'],
         open=df['open'],
         high=df['high'],
         low=df['low'],
         close=df['close'],
-        increasing_line_color='#2D9F4F',
-        decreasing_line_color='#D9534F'
+        increasing_line_color='#4CAF50',
+        decreasing_line_color='#EF5350',
+        increasing_fillcolor='rgba(76, 175, 80, 0.7)',
+        decreasing_fillcolor='rgba(239, 83, 80, 0.7)'
     )])
     fig.update_layout(
         title=f"{symbol} 7-Day Candlestick Chart",
@@ -86,23 +105,59 @@ def plot_candlestick(data, symbol):
     )
     return fig
 
-def predict(api_url, payload):
-    try:
-        response = requests.get(api_url, params=payload, timeout=15)
-        if response.status_code == 200:
-            result = response.json()
-            prediction = result.get('predicted_next_day_high') or result.get('prediction') or result.get('predicted_high') or result.get('next_day_high')
-            if prediction is not None:
-                return prediction
-            return str(result)
-        else:
-            return f"API Error: {response.status_code}"
-    except requests.exceptions.Timeout:
-        return "Request Timeout"
-    except requests.exceptions.ConnectionError:
-        return "Connection Error"
-    except Exception as e:
-        return f"Error: {str(e)}"
+def predict(api_url, payload, coin_symbol=""):
+    max_retries = 1
+    retry_delay = 1
+    
+    for attempt in range(max_retries):
+        try:
+            if coin_symbol == "XRP":
+                response = requests.get(api_url, timeout=30)
+            else:
+                response = requests.get(api_url, params=payload, timeout=120)
+                
+            if response.status_code == 200:
+                result = response.json()
+                
+                if 'error' in result:
+                    if attempt < max_retries - 1:
+                        import time
+                        time.sleep(retry_delay)
+                        continue
+                    return f"API Error: {result['error']}"
+                
+                if coin_symbol == "XRP":
+                    high_value = result.get('high') or result.get('predicted_high_next')
+                    if high_value:
+                        return float(high_value)
+                
+                # Bitcoin format: predicted_next_day_high_usd
+                prediction = result.get('predicted_next_day_high_usd') or result.get('predicted_next_day_high') or result.get('prediction') or result.get('predicted_high') or result.get('next_day_high')
+                if prediction is not None:
+                    return prediction
+                return str(result)
+            elif response.status_code == 429:
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(retry_delay * (attempt + 1))
+                    continue
+                return "API busy, please try again"
+            else:
+                return f"API Error: {response.status_code}"
+        except requests.exceptions.Timeout:
+            if attempt < max_retries - 1:
+                continue
+            return "Request Timeout"
+        except requests.exceptions.ConnectionError:
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(retry_delay)
+                continue
+            return "Connection Error"
+        except Exception as e:
+            return f"Error: {str(e)}"
+    
+    return "Failed after retries"
 
 st.markdown("""
 <style>
@@ -179,7 +234,6 @@ prices_html = get_crypto_prices()
 st.markdown(f"<div class='ticker'><span>{prices_html}</span></div>", unsafe_allow_html=True)
 
 st.title("Crypto Next-Day High Price Prediction Dashboard")
-st.markdown("View **7-day candlestick charts** and predict tomorrow's high price.")
 
 col1, col2, col3, col4 = st.columns(4)
 with col1:
@@ -198,42 +252,50 @@ with col4:
 st.markdown("---")
 
 API_URLS = {
-    "BTC": "https://bitcoin-api-studentA.onrender.com/predict",
+    "BTC": "https://at3-bitcoin-latest-1.onrender.com/predict/bitcoin",
     "ETH": "https://ethereum-api-studentB.onrender.com/predict",
-    "XRP": "https://xrp-api-studentC.onrender.com/predict",
-    "SOL": "https://solana-fastapi.onrender.com/predict"
+    "XRP": "https://three6120-25sp-at3-group08-25660135-api.onrender.com/predict_latest",
+    "SOL": "https://solana-fastapi.onrender.com/predict" 
 }
 
 coins_data = {
-    "Bitcoin": ("bitcoin", "BTC", "XXBTZUSD", "https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/btc.png", "Random Forest Model (Student A)", API_URLS["BTC"]),
-    "Ethereum": ("ethereum", "ETH", "XETHZUSD", "https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/eth.png", "XGBoost Model (Student B)", API_URLS["ETH"]),
-    "XRP": ("xrp", "XRP", "XXRPZUSD", "https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/xrp.png", "Gradient Boosting Model (Student C)", API_URLS["XRP"]),
-    "Solana": ("solana", "SOL", "SOLUSD", "https://s2.coinmarketcap.com/static/img/coins/128x128/5426.png", "LightGBM Model (Student D - Nian-Ya Weng)", API_URLS["SOL"])
+    "Bitcoin": ("bitcoin", "BTC", "https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/btc.png", API_URLS["BTC"]),
+    "Ethereum": ("ethereum", "ETH", "https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/eth.png", API_URLS["ETH"]),
+    "XRP": ("ripple", "XRP", "https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/xrp.png", API_URLS["XRP"]),
+    "Solana": ("solana", "SOL", "https://s2.coinmarketcap.com/static/img/coins/128x128/5426.png", API_URLS["SOL"])
 }
 
-cid, symbol, kraken_pair, icon_url, model_name, api_url = coins_data[st.session_state.selected_coin]
+
+
+cid, symbol, icon_url, api_url = coins_data[st.session_state.selected_coin]
+
 
 try:
     st.image(icon_url, width=50)
 except:
     st.write(f"🪙 {symbol}")
 
-st.subheader(f"{symbol} — {model_name}")
-
 col_btn, col_result = st.columns([1, 2])
 
 with col_btn:
-    predict_btn = st.button(f"🚀 Predict {symbol} High", key=f"{symbol}_predict")
+    predict_btn = st.button(f"Predict {symbol} High(D+1)", key=f"{symbol}_predict")
 
 with col_result:
     if predict_btn:
-        with st.spinner(f'Predicting {symbol}...'):
-            prediction = predict(api_url, {
-                "open": 100, "high": 105, "low": 95, "close": 102,
-                "volume": 3000000, "marketCap": 1.0e9,
-                "price_diff": 5, "daily_range": 10, "SMA_7": 101
-            })
-            st.session_state.predictions[symbol] = prediction
+        
+        import time
+        last_time = st.session_state.prediction_time.get(symbol, 0)
+        if time.time() - last_time < 180 and symbol in st.session_state.predictions:
+            st.info("Using cached prediction (refreshes every 3 min)")
+        else:
+            with st.spinner(f'Predicting {symbol}...'):
+                prediction = predict(api_url, {
+                    "open": 100, "high": 105, "low": 95, "close": 102,
+                    "volume": 3000000, "marketCap": 1.0e9,
+                    "price_diff": 5, "daily_range": 10, "SMA_7": 101
+                }, coin_symbol=symbol)
+                st.session_state.predictions[symbol] = prediction
+                st.session_state.prediction_time[symbol] = time.time()
     
     if symbol in st.session_state.predictions:
         result = st.session_state.predictions[symbol]
@@ -244,13 +306,13 @@ with col_result:
 
 st.markdown("---")
 
-kraken_data = get_kraken_ohlc(kraken_pair)
-if kraken_data:
-    candle_fig = plot_candlestick(kraken_data, symbol)
+coin_data = get_coin_history(cid)
+if coin_data:
+    candle_fig = plot_candlestick(coin_data, symbol)
     if candle_fig:
         st.plotly_chart(candle_fig, use_container_width=True)
 else:
     st.error(f"Unable to load {symbol} candlestick chart")
 
 st.markdown("---")
-st.markdown("<div style='text-align: center; color: #8B7355; padding: 1rem;'><p>Data: CoinGecko API | Kraken API | Group Project AT3</p></div>", unsafe_allow_html=True)
+st.markdown("<div style='text-align: center; color: #8B7355; padding: 1rem;'><p>Data: CoinGecko API | Group 8 Project AT3</p></div>", unsafe_allow_html=True)
