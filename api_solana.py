@@ -68,7 +68,7 @@ class PredictionRequest(BaseModel):
 def read_root():
     """API Basic Information"""
     return {
-        "message": "🚀 Solana (SOL) Price Prediction API",
+        "message": "Solana (SOL) Price Prediction API",
         "model": "LightGBM",
         "author": "Student D (Nian-Ya Weng)",
         "version": "1.0.0",
